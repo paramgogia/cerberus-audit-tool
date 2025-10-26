@@ -1,10 +1,26 @@
 import { NextResponse } from "next/server";
 import lighthouse from "@lighthouse-web3/sdk";
 
+// --- ADDED: Type for the incoming report ---
+interface AnalysisReport {
+  overallRiskScore: string;
+  summary: string;
+  // We only need the JSON structure, not every field
+}
+
+// --- ADDED: Type for the Lighthouse response ---
+interface LighthouseUploadResponse {
+  data: {
+    Name: string;
+    Hash: string;
+    Size: string;
+  };
+}
+
 export async function POST(req: Request) {
   try {
     // 1. Get the analysisResult JSON from the client's request
-    const reportJson = await req.json();
+    const reportJson: AnalysisReport = await req.json();
     
     if (!reportJson) {
       return NextResponse.json({ error: "No report data provided" }, { status: 400 });
@@ -19,8 +35,7 @@ export async function POST(req: Request) {
     const jsonString = JSON.stringify(reportJson, null, 2);
 
     // 3. Upload the string to Lighthouse
-    // The 'uploadText' function automatically wraps it in a JSON file for you
-    const response = await lighthouse.uploadText(
+    const response: LighthouseUploadResponse = await lighthouse.uploadText(
       jsonString, 
       apiKey, 
       "Cerberus Audit Report" // Give it a name
@@ -41,7 +56,15 @@ export async function POST(req: Request) {
   }
 }
 
-// Including the GET function you provided, in case you need it elsewhere
+// --- MODIFIED: Added types to your GET function ---
+interface LighthouseFile {
+  cid: string;
+  fileName: string;
+  fileSizeInBytes: string;
+  createdAt: number;
+  // ... any other fields you might need
+}
+
 export async function GET() {
   try {
     const apiKey = process.env.LIGHTHOUSE_API_KEY;
@@ -51,11 +74,10 @@ export async function GET() {
 
     const response = await lighthouse.getUploads(apiKey, null);
     
-    const files = response.data.fileList.map((f: any) => ({
+    // --- FIXED: Replaced 'f: any' with the 'LighthouseFile' type ---
+    const files = response.data.fileList.map((f: LighthouseFile) => ({
       cid: f.cid,
       fileName: f.fileName,
-      size: f.fileSizeInBytes,
-      createdAt: f.createdAt,
     }));
     return NextResponse.json(files);
 

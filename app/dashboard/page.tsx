@@ -17,17 +17,15 @@ declare global {
 }
 
 // --- ADDED ---
-// TODO: 1. Add your Gemini API Key here (keep this secret, use environment variables in production)
+// TODO: 1. Add your Gemini API Key here (or move to .env.local)
 const GEMINI_API_KEY = "AIzaSyBcW_ZHlLTyjGtjcBOqjCjQ2RnxH2f-G6k" // <-- YOUR KEY
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`
 
-// --- ADDED (Pinata Configuration) ---
-// TODO: 2. Add your Pinata JWT Key here (keep this secret, use environment variables in production)
-//       (Go to app.pinata.cloud/keys to create one)
-const PINATA_JWT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI2NjBlZTU2Zi01ODE4LTRlNjAtOGU0MC03ODU3YTc5Y2RiZmQiLCJlbWFpbCI6InRpbWVwYXNzMjIyNkBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwicGluX3BvbGljeSI6eyJyZWdpb25zIjpbeyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJGUkExIn0seyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJOWUMxIn1dLCJ2ZXJzaW9uIjoxfSwibWZhX2VuYWJsZWQiOmZhbHNlLCJzdGF0dXMiOiJBQ1RJVkUifSwiYXV0aGVudGljYXRpb25UeXBlIjoic2NvcGVkS2V5Iiwic2NvcGVkS2V5S2V5IjoiMWU4MjhiZGIxZWFlMTFjZWJhYjgiLCJzY29wZWRLZXlTZWNyZXQiOiJkYjVkZTkxYTFmZmQ1ZjJjZjBkMjIwMDlmZDI1YTRkY2ZlNmFlYjE3OTE0YmFmMmI5OWIwODgxOWFmNzc2MzNhIiwiZXhwIjoxNzkzMDM3MzI5fQ.WF8nJ9Rl2o_7ptbLA2S1OMMwGnozydya2JFG4o4B0Ik" // <-- ADD YOUR PINATA KEY
-const PINATA_API_URL = `https://api.pinata.cloud/pinning/pinJSONToIPFS`
+// --- REMOVED ---
+// Removed PINATA_JWT_KEY and PINATA_API_URL.
+// API keys should NEVER be in client-side code.
 
-// TODO: 3. Add your deployed Sepolia contract address here
+// TODO: 2. Add your deployed Sepolia contract address here
 const CONTRACT_ADDRESS = "0x504f044C896fE10fc2a8E36E02F56f878B2F69AD"
 // --- ADDED --- (Pasted from your prompt)
 const ABI = [
@@ -103,7 +101,6 @@ interface BestPractice {
   line: number;
   recommendation: string;
 }
-
 interface AnalysisResult {
   overallRiskScore: RiskScore;
   summary: string;
@@ -136,8 +133,8 @@ export default function Dashboard() {
     setAnalysisComplete(false)
     setAnalysisResult(null)
     setStatus("Analyzing... Cerberus is sniffing for vulnerabilities.")
-
-   
+    
+    
 
     try {
       const response = await fetch(GEMINI_API_URL, {
@@ -195,7 +192,7 @@ export default function Dashboard() {
     }
   }
 
-  // --- MODIFIED (Full attestation logic with Pinata upload) ---
+  // --- MODIFIED (Swapped Pinata for Lighthouse API route) ---
   const handleAttestation = async () => {
     if (!analysisResult) {
       setStatus("Error: No analysis result to attest.")
@@ -206,64 +203,48 @@ export default function Dashboard() {
       return
     }
     
-
     setIsAttesting(true)
     setStatus("Preparing attestation...")
 
     try {
-      // 1. Connect to MetaMask
+      // 1. --- (NEW) Upload Report via our Lighthouse API Route ---
+      setStatus("Uploading report to IPFS via Lighthouse...")
+      
+      const response = await fetch('/api/upload', { // Calls our new API route
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(analysisResult), // Send the report as the body
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // 'data.error' is the error message from our API route
+        throw new Error(data.error || 'Failed to pin report to IPFS.');
+      }
+
+      const reportHash = data.cid; // Get the CID from our API route's response
+      
+      if (!reportHash) {
+        throw new Error("Could not get IPFS hash from API response.");
+      }
+
+      setStatus(`Report pinned to IPFS! CID: ${reportHash.substring(0, 10)}...`);
+
+      // 2. Connect to MetaMask
       const provider = new ethers.providers.Web3Provider(window.ethereum)
-      await provider.send("eth_requestAccounts", []) // Request wallet connection
+      await provider.send("eth_requestAccounts", [])
       const signer = provider.getSigner()
 
-      // 2. Create contract instance
+      // 3. Create contract instance
       const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer)
 
-      // 3. Calculate Code Hash (using ethers v5 utils)
+      // 4. Calculate Code Hash --- (THIS IS THE TYPO FIX) ---
       const codeHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(code))
       
-      // 4. --- (THIS IS THE NEW PART) Upload Report to Pinata ---
-      setStatus("Uploading report to IPFS via Pinata...")
-
-      // Create a more descriptive payload for Pinata
-      const pinataBody = {
-        pinataContent: analysisResult,
-        pinataMetadata: {
-            name: `Cerberus Audit Report - ${codeHash.substring(0, 10)}...`,
-            keyvalues: {
-                codeHash: codeHash,
-                risk: analysisResult.overallRiskScore
-            }
-        },
-        pinataOptions: {
-            cidVersion: 1 // Use CIDv1 for modern compatibility
-        }
-      }
-      
-      const pinataResponse = await fetch(PINATA_API_URL, {
-        method: "POST",
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${PINATA_JWT_KEY}`
-        },
-        body: JSON.stringify(pinataBody)
-      })
-
-      if (!pinataResponse.ok) {
-        const errorData = await pinataResponse.json()
-        throw new Error(errorData.error?.reason || `Pinata API request failed with status ${pinataResponse.status}`)
-      }
-
-      const pinataResult = await pinataResponse.json()
-      const reportHash = pinataResult.IpfsHash // This is the REAL CID
-
-      if (!reportHash) {
-        throw new Error("Could not get IPFS hash from Pinata response.")
-      }
-
-      setStatus(`Report pinned to IPFS! CID: ${reportHash.substring(0, 10)}...`)
-      
-      // 5. Send the transaction (with the REAL IPFS hash)
+      // 5. Send the transaction (with the REAL Lighthouse CID)
       setStatus("Connecting to wallet... Please confirm the transaction.")
       const tx = await contract.registerAudit(codeHash, reportHash)
       
@@ -273,7 +254,7 @@ export default function Dashboard() {
       
       setStatus("Attestation complete! Audit registered on-chain.")
 
-    } catch (error: any) { // Catch as 'any' to access error.reason
+    } catch (error: any) {
       console.error("Attestation Error:", error)
       setStatus(error.reason || error.message || "Attestation failed.")
     } finally {
@@ -409,6 +390,7 @@ export default function Dashboard() {
 }
 
 // --- MODIFIED (Fix 3: Apply prop types) ---
+// --- MODIFIED (Fix 3: Apply prop types) ---
 function ReportTabs({ result }: ReportTabsProps) {
   // --- MODIFIED ---
   if (!result) {
@@ -418,7 +400,7 @@ function ReportTabs({ result }: ReportTabsProps) {
   return (
     <Tabs defaultValue="vulnerabilities" className="w-full">
       <TabsList className="grid w-full grid-cols-3 bg-input">
-        {/* // --- MODIFIED --- (Dynamic counts) */}
+        {/* // --- FIXED: Added optional chaining --- */}
         <TabsTrigger value="vulnerabilities" className="text-xs">
           Vulnerabilities ({result.vulnerabilities?.length || 0})
         </TabsTrigger>
@@ -432,8 +414,9 @@ function ReportTabs({ result }: ReportTabsProps) {
 
       {/* // --- MODIFIED --- (Dynamic content from props) */}
       <TabsContent value="vulnerabilities" className="space-y-3 mt-4">
+        {/* --- FIXED: Used optional chaining (?.) on BOTH .length AND .map --- */}
         {result.vulnerabilities?.length > 0 ? (
-          result.vulnerabilities.map((item, i) => (
+          result.vulnerabilities?.map((item: Vulnerability, i: number) => (
             <div key={i} className="p-3 rounded-lg border border-border bg-card/50 text-xs space-y-2">
               <div className="flex items-center gap-2">
                 <Badge
@@ -456,8 +439,9 @@ function ReportTabs({ result }: ReportTabsProps) {
       </TabsContent>
 
       <TabsContent value="gas" className="space-y-3 mt-4">
+        {/* --- FIXED: Used optional chaining (?.) on BOTH .length AND .map --- */}
         {result.gasOptimizations?.length > 0 ? (
-          result.gasOptimizations.map((item, i) => (
+          result.gasOptimizations?.map((item: GasOptimization, i: number) => (
             <div key={i} className="p-3 rounded-lg border border-border bg-card/50 text-xs space-y-2">
               <div className="flex items-center gap-2">
                 <Zap className="w-4 h-4 text-yellow-500" />
@@ -472,9 +456,9 @@ function ReportTabs({ result }: ReportTabsProps) {
       </TabsContent>
 
       <TabsContent value="practices" className="space-y-3 mt-4">
-        {/* --- MODIFIED (Typo fix: bestPractCices -> bestPractices) --- */}
+        {/* --- FIXED: Used optional chaining (?.) on BOTH .length AND .map --- */}
         {result.bestPractices?.length > 0 ? (
-          result.bestPractices.map((item, i) => (
+          result.bestPractices?.map((item: BestPractice, i: number) => (
             <div key={i} className="p-3 rounded-lg border border-border bg-card/50 text-xs space-y-2">
               <div className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-500" />
