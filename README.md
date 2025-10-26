@@ -2,7 +2,7 @@
 
 
 > **Project Vision:** Cerberus uses advanced AI Agents to find smart contract bugs and saves the reports on the blockchain as a permanent, public security record.
-
+ **Live deployment link** https://cerberus-audit-tool.vercel.app/
 
 ---
 
