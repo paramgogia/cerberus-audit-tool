@@ -18,9 +18,16 @@ declare global {
 
 // --- ADDED ---
 // TODO: 1. Add your Gemini API Key here (keep this secret, use environment variables in production)
-const GEMINI_API_KEY = "AIzaSyBcW_ZHlLTyjGtjcBOqjCjQ2RnxH2f-G6k"
+const GEMINI_API_KEY = "AIzaSyBcW_ZHlLTyjGtjcBOqjCjQ2RnxH2f-G6k" // <-- YOUR KEY
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`
-// TODO: 2. Add your deployed Sepolia contract address here
+
+// --- ADDED (Pinata Configuration) ---
+// TODO: 2. Add your Pinata JWT Key here (keep this secret, use environment variables in production)
+//       (Go to app.pinata.cloud/keys to create one)
+const PINATA_JWT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI2NjBlZTU2Zi01ODE4LTRlNjAtOGU0MC03ODU3YTc5Y2RiZmQiLCJlbWFpbCI6InRpbWVwYXNzMjIyNkBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwicGluX3BvbGljeSI6eyJyZWdpb25zIjpbeyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJGUkExIn0seyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJOWUMxIn1dLCJ2ZXJzaW9uIjoxfSwibWZhX2VuYWJsZWQiOmZhbHNlLCJzdGF0dXMiOiJBQ1RJVkUifSwiYXV0aGVudGljYXRpb25UeXBlIjoic2NvcGVkS2V5Iiwic2NvcGVkS2V5S2V5IjoiMWU4MjhiZGIxZWFlMTFjZWJhYjgiLCJzY29wZWRLZXlTZWNyZXQiOiJkYjVkZTkxYTFmZmQ1ZjJjZjBkMjIwMDlmZDI1YTRkY2ZlNmFlYjE3OTE0YmFmMmI5OWIwODgxOWFmNzc2MzNhIiwiZXhwIjoxNzkzMDM3MzI5fQ.WF8nJ9Rl2o_7ptbLA2S1OMMwGnozydya2JFG4o4B0Ik" // <-- ADD YOUR PINATA KEY
+const PINATA_API_URL = `https://api.pinata.cloud/pinning/pinJSONToIPFS`
+
+// TODO: 3. Add your deployed Sepolia contract address here
 const CONTRACT_ADDRESS = "0x504f044C896fE10fc2a8E36E02F56f878B2F69AD"
 // --- ADDED --- (Pasted from your prompt)
 const ABI = [
@@ -130,6 +137,8 @@ export default function Dashboard() {
     setAnalysisResult(null)
     setStatus("Analyzing... Cerberus is sniffing for vulnerabilities.")
 
+   
+
     try {
       const response = await fetch(GEMINI_API_URL, {
         method: "POST",
@@ -158,11 +167,15 @@ export default function Dashboard() {
       })
 
       if (!response.ok) {
-        throw new Error(`Google API request failed with status ${response.status}`)
+        const errorData = await response.json()
+        throw new Error(errorData?.error?.message || `Google API request failed with status ${response.status}`)
       }
 
       const data = await response.json()
       
+      if (!data.candidates || !data.candidates[0].content.parts[0].text) {
+        throw new Error("Invalid response structure from Gemini API.")
+      }
       // The JSON response from Gemini is in `candidates[0].content.parts[0].text`
       const jsonResponseText = data.candidates[0].content.parts[0].text
       const parsedResult: AnalysisResult = JSON.parse(jsonResponseText)
@@ -182,17 +195,17 @@ export default function Dashboard() {
     }
   }
 
-  // --- ADDED ---
+  // --- MODIFIED (Full attestation logic with Pinata upload) ---
   const handleAttestation = async () => {
     if (!analysisResult) {
       setStatus("Error: No analysis result to attest.")
       return
     }
-    // --- MODIFIED (Fix 1: Runtime check is still needed) ---
     if (!window.ethereum) {
       setStatus("Error: MetaMask not found. Please install it.")
       return
     }
+    
 
     setIsAttesting(true)
     setStatus("Preparing attestation...")
@@ -209,17 +222,49 @@ export default function Dashboard() {
       // 3. Calculate Code Hash (using ethers v5 utils)
       const codeHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(code))
       
-      // 4. Get Report Hash (Mocking IPFS upload)
-      //    In a real app, you would upload the 'analysisResult' JSON to IPFS/Arweave
-      //    and get the real content identifier (CID) hash.
-      //    For this hackathon, we'll create a mock hash or hash the summary.
-      //    Let's just use a mock hash for simplicity.
-      //    TODO: 3. (Optional) Replace this with a real IPFS upload.
-      const reportHash = `Qm...${ethers.utils.id(JSON.stringify(analysisResult)).slice(2, 10)}` // Mock IPFS hash
+      // 4. --- (THIS IS THE NEW PART) Upload Report to Pinata ---
+      setStatus("Uploading report to IPFS via Pinata...")
+
+      // Create a more descriptive payload for Pinata
+      const pinataBody = {
+        pinataContent: analysisResult,
+        pinataMetadata: {
+            name: `Cerberus Audit Report - ${codeHash.substring(0, 10)}...`,
+            keyvalues: {
+                codeHash: codeHash,
+                risk: analysisResult.overallRiskScore
+            }
+        },
+        pinataOptions: {
+            cidVersion: 1 // Use CIDv1 for modern compatibility
+        }
+      }
       
+      const pinataResponse = await fetch(PINATA_API_URL, {
+        method: "POST",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${PINATA_JWT_KEY}`
+        },
+        body: JSON.stringify(pinataBody)
+      })
+
+      if (!pinataResponse.ok) {
+        const errorData = await pinataResponse.json()
+        throw new Error(errorData.error?.reason || `Pinata API request failed with status ${pinataResponse.status}`)
+      }
+
+      const pinataResult = await pinataResponse.json()
+      const reportHash = pinataResult.IpfsHash // This is the REAL CID
+
+      if (!reportHash) {
+        throw new Error("Could not get IPFS hash from Pinata response.")
+      }
+
+      setStatus(`Report pinned to IPFS! CID: ${reportHash.substring(0, 10)}...`)
+      
+      // 5. Send the transaction (with the REAL IPFS hash)
       setStatus("Connecting to wallet... Please confirm the transaction.")
-      
-      // 5. Send the transaction
       const tx = await contract.registerAudit(codeHash, reportHash)
       
       setStatus("Transaction sent... waiting for confirmation.")
@@ -287,8 +332,8 @@ export default function Dashboard() {
                   />
                   <div className="flex gap-3">
                     <Button className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 flex-1"
-                        disabled={isAnalyzing || isAttesting}
-                        >
+                      disabled={isAnalyzing || isAttesting}
+                      >
                       <Upload className="w-4 h-4" />
                       Load File
                     </Button>
@@ -333,12 +378,12 @@ export default function Dashboard() {
                       analysisResult.overallRiskScore === "Medium" ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-500" :
                       "bg-green-500/10 border-green-500/30 text-green-500"
                     }`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <AlertCircle className="w-5 h-5" />
-                      <span className="font-semibold">RISK: {analysisResult.overallRiskScore.toUpperCase()}</span>
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertCircle className="w-5 h-5" />
+                        <span className="font-semibold">RISK: {analysisResult.overallRiskScore.toUpperCase()}</span>
+                      </div>
+                      <p className="text-sm opacity-80">{analysisResult.summary}</p>
                     </div>
-                    <p className="text-sm opacity-80">{analysisResult.summary}</p>
-                  </div>
                     
                     {/* // --- MODIFIED --- (Pass result as prop) */}
                     <ReportTabs result={analysisResult} />
